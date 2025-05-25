@@ -3,5 +3,24 @@
 version = 4
 
 [[package]]
+name = "mt19937"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df7151a832e54d2d6b2c827a20e5bcdd80359281cd2c354e725d4b82e7c471de"
+dependencies = [
+ "rand_core",
+]
+
+[[package]]
 name = "p0"
 version = "0.1.0"
+dependencies = [
+ "mt19937",
+ "rand_core",
+]
+
+[[package]]
+name = "rand_core"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
