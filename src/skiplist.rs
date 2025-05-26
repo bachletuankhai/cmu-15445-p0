@@ -1,12 +1,11 @@
-use rand_core::{RngCore, SeedableRng};
+use rand_core::{RngCore};
 use std::{
     array,
-    cmp::Ordering,
     fmt::Display,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
 };
 
-use mt19937::{Seed, MT19937};
+use mt19937::MT19937;
 
 pub struct SkipList<K: Ord, const MAX_HEIGHT: usize = 14, const SEED: u32 = 15445> {
     header: Arc<RwLock<Node<K>>>,
@@ -40,11 +39,18 @@ impl<K: Ord, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_HEIGHT, S
         let mut found = false;
         let update: [Arc<RwLock<Node<K>>>; MAX_HEIGHT] = array::from_fn(|i| {
             let level = MAX_HEIGHT - i;
-            while let Some(next) = cur.read().unwrap().next(level) {
+            loop {
+                let next = {
+                    let cur_read_lock = cur.read().unwrap();
+                    match cur_read_lock.next(level) {
+                        Some(arc) => arc,
+                        None => break,
+                    }
+                };
                 let next_node_read_lock = next.read().unwrap();
                 let next_key = next_node_read_lock.key.as_ref();
                 match next_key {
-                    Some(k) if *k < key => cur = next,
+                    Some(k) if *k < key => cur = next.clone(),
                     Some(k) if *k == key => {
                         // Key already exists
                         found = true;
@@ -89,13 +95,19 @@ impl<K: Ord, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_HEIGHT, S
     fn find(&self, key: &K) -> Option<Arc<RwLock<Node<K>>>> {
         let mut cur = self.header.clone();
         for level in (0..self.height).rev() {
-            while let Some(next) = cur.read().unwrap().next(level) {
-                let next_node_read_lock = next.read().unwrap();
-                let next_key = next_node_read_lock.key.as_ref();
-                match next_key {
-                    Some(k) if *k < *key => cur = next,
-                    Some(k) if *k == *key => return Some(next),
-                    _ => break,
+            loop {
+                let next = {
+                    let cur_read_lock = cur.read().unwrap();
+                    match cur_read_lock.next(level) {
+                        Some(arc) => arc,
+                        None => break
+                    }
+                };
+                let next_read_lock = next.read().unwrap();
+                match next_read_lock.key.as_ref() {
+                    Some(k) if *k < *key => cur = next.clone(),
+                    Some(k) if *k == *key => return Some(next.clone()),
+                    _ => break
                 }
             }
         }
