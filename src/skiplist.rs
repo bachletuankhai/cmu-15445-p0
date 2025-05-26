@@ -1,7 +1,7 @@
 use rand_core::RngCore;
 use std::{
     array,
-    fmt::Display,
+    fmt::{Debug, Display},
     sync::{Arc, RwLock},
 };
 
@@ -86,6 +86,7 @@ impl<K: Ord, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_HEIGHT, S
                 node_to_update_write_lock.set_next(i, new_node.clone());
             }
         }
+        self.size += 1;
 
         true
     }
@@ -184,11 +185,33 @@ impl<K: Ord, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_HEIGHT, S
     pub fn print(&self) {}
 }
 
-impl<K: Ord, const MAX_HEIGHT: usize, const SEED: u32> Display for SkipList<K, MAX_HEIGHT, SEED> {
+impl<K: Ord + std::fmt::Debug, const MAX_HEIGHT: usize, const SEED: u32> Display for SkipList<K, MAX_HEIGHT, SEED> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        if let Err(e) = f.write_fmt(format_args!("Height: {} | Size: {}", self.height, self.size)) {
+            return Err(e);
+        };
+        let cur = self.header.clone();
+        loop {
+            let next = cur.read().map(|node| node.next(1)).unwrap();
+            match next {
+                Some(arc) => {
+                    let read_lock = arc.read().unwrap();
+                    if let Err(e) = f.write_fmt(format_args!("Key: {:?} | Height: {}\n", read_lock.key, read_lock.height())) {
+                        return Err(e);
+                    }
+                },
+                None => break,
+            }
+        }
+        Ok(())
     }
 }
+
+impl<K: Ord + std::fmt::Debug, const MAX_HEIGHT: usize, const SEED: u32> Debug for SkipList<K, MAX_HEIGHT, SEED> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{self}"))
+    }
+} 
 
 struct Node<K: Ord> {
     key: Option<K>,
