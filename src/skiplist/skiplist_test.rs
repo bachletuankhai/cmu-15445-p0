@@ -18,11 +18,11 @@ fn test1() {
 
 #[test]
 fn test2() {
-    let n = 50;
+    let n = 100;
     let barrier = Barrier::new(n);
 
+    let list = Arc::new(RwLock::new(SkipList::<usize>::new()));
     thread::scope(|s| {
-        let list = Arc::new(RwLock::new(SkipList::<usize>::new()));
         let barrier = &barrier;
         for i in 0..n {
             let list = list.clone();
@@ -37,5 +37,6 @@ fn test2() {
                 assert!(list.read().map(|l| l.contains(&i)).unwrap());
             });
         }
-    })
+    });
+    debug_assert!(list.read().map(|l| l.size()).unwrap() == 100);
 }
