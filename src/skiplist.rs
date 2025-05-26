@@ -1,4 +1,4 @@
-use rand_core::{RngCore};
+use rand_core::RngCore;
 use std::{
     array,
     fmt::Display,
@@ -74,18 +74,77 @@ impl<K: Ord, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_HEIGHT, S
 
         for i in 0..new_height {
             let node_to_update = update[MAX_HEIGHT - i].clone();
-            let mut node_to_update_write_lock = node_to_update.write().unwrap();
-            let mut new_node_write_lock = new_node.write().unwrap();
-
-            new_node_write_lock.set_next(i, node_to_update_write_lock.next(i).unwrap());
-            node_to_update_write_lock.set_next(i, new_node.clone());
+            {
+                let node_to_update_read_lock = node_to_update.read().unwrap();
+                if let Some(arc) = node_to_update_read_lock.next(i) {
+                    let mut new_node_write_lock = new_node.write().unwrap();
+                    new_node_write_lock.set_next(i, arc);
+                }
+            }
+            {
+                let mut node_to_update_write_lock = node_to_update.write().unwrap();
+                node_to_update_write_lock.set_next(i, new_node.clone());
+            }
         }
 
         true
     }
 
     pub fn erase(&mut self, key: &K) -> bool {
-        false
+        let mut cur = self.header.clone();
+        let mut found = false;
+        let update: [Arc<RwLock<Node<K>>>; MAX_HEIGHT] = array::from_fn(|i| {
+            let level = MAX_HEIGHT - i;
+            loop {
+                let next = {
+                    let cur_read_lock = cur.read().unwrap();
+                    match cur_read_lock.next(level) {
+                        Some(arc) => arc,
+                        None => break,
+                    }
+                };
+                let next_node_read_lock = next.read().unwrap();
+                let next_key = next_node_read_lock.key.as_ref();
+                match next_key {
+                    Some(k) if *k < *key => cur = next.clone(),
+                    Some(k) if *k == *key => {
+                        // Key already exists
+                        found = true;
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+            cur.clone()
+        });
+
+        if !found {
+            return false;
+        }
+
+        let node_to_delete = cur.read().map(|node| node.next(1)).unwrap().expect("Node to erase should be found here");
+
+        for i in (0..MAX_HEIGHT).rev() {
+            let node_to_update = update[MAX_HEIGHT - i].clone();
+            let next = node_to_update.read().map(|node| node.next(i)).unwrap();
+            match next {
+                Some(arc) if Arc::ptr_eq(&arc, &node_to_delete) => {
+                    let delete_next_i = node_to_delete.read().map(|node| node.next(i)).unwrap();
+
+                    let mut node_to_update_write_lock = node_to_update.write().unwrap();
+                    match delete_next_i {
+                        Some(arc) => {
+                            node_to_update_write_lock.set_next(i, arc);
+                        }
+                        None => {
+                            node_to_update_write_lock.remove_next(i);
+                        }
+                    }
+                }
+                _ => continue,
+            }
+        }
+        true
     }
 
     pub fn contains(&self, key: &K) -> bool {
@@ -100,14 +159,14 @@ impl<K: Ord, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_HEIGHT, S
                     let cur_read_lock = cur.read().unwrap();
                     match cur_read_lock.next(level) {
                         Some(arc) => arc,
-                        None => break
+                        None => break,
                     }
                 };
                 let next_read_lock = next.read().unwrap();
                 match next_read_lock.key.as_ref() {
                     Some(k) if *k < *key => cur = next.clone(),
                     Some(k) if *k == *key => return Some(next.clone()),
-                    _ => break
+                    _ => break,
                 }
             }
         }
@@ -129,10 +188,6 @@ impl<K: Ord, const MAX_HEIGHT: usize, const SEED: u32> Display for SkipList<K, M
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         todo!()
     }
-}
-
-impl<K: Ord, const MAX_HEIGHT: usize, const SEED: u32> Drop for SkipList<K, MAX_HEIGHT, SEED> {
-    fn drop(&mut self) {}
 }
 
 struct Node<K: Ord> {
@@ -166,8 +221,15 @@ impl<K: Ord> Node<K> {
     fn set_next(&mut self, level: usize, next: Arc<RwLock<Node<K>>>) {
         assert!(level < self.links.capacity());
 
-        while level < self.links.len() {
-            self.links.push(next.clone());
+        if level < self.links.len() {
+            self.links[level] = next;
+            return;
         }
+
+        self.links.resize(level + 1, next);
+    }
+
+    fn remove_next(&mut self, level: usize) {
+        self.links.truncate(level);
     }
 }
