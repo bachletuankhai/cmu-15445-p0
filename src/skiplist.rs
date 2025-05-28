@@ -1,7 +1,9 @@
 use rand_core::RngCore;
 use std::{
     array,
+    borrow::Borrow,
     fmt::{Debug, Display},
+    ops::Deref,
     sync::{Arc, RwLock},
 };
 
@@ -9,8 +11,8 @@ use mt19937::MT19937;
 
 pub struct SkipList<K: Ord, const MAX_HEIGHT: usize = 14, const SEED: u32 = 15445> {
     header: Arc<RwLock<Node<K>>>,
-    height: usize,
-    size: usize,
+    height: RwLock<usize>,
+    size: RwLock<usize>,
     rng: Arc<RwLock<MT19937>>,
 }
 
@@ -20,18 +22,18 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
         let rng = MT19937::new_with_slice_seed(&[SEED]);
         SkipList {
             header,
-            height: 1,
-            size: 0,
+            height: RwLock::new(1),
+            size: RwLock::new(0),
             rng: Arc::new(RwLock::new(rng)),
         }
     }
 
     pub fn empty(&self) -> bool {
-        self.height == 1
+        self.height.read().map(|h| *h == 1).unwrap()
     }
 
     pub fn size(&self) -> usize {
-        self.size
+        self.size.read().map(|s| *s).unwrap()
     }
 
     pub fn insert(&mut self, key: K) -> bool {
@@ -42,8 +44,10 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
         }
 
         let new_height = self.random_height();
-        if new_height > self.height {
-            self.height = new_height;
+        let is_higher = self.height.read().map(|h| new_height > *h).unwrap();
+        if is_higher {
+            let mut height = self.height.write().unwrap();
+            *height += 1;
         }
         let new_node = Arc::new(RwLock::new(Node::new(key, new_height)));
 
@@ -61,21 +65,28 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
                 node_to_update_write_lock.set_next(i, new_node.clone());
             }
         }
-        self.size += 1;
+        {
+            let mut size = self.size.write().unwrap();
+            *size += 1;
+        }
 
         true
     }
 
-    fn trace(
+    fn trace<Q>(
         &self,
-        key: &K,
+        key: Q,
     ) -> (
         [Arc<RwLock<Node<K>>>; MAX_HEIGHT],
         Arc<RwLock<Node<K>>>,
         bool,
-    ) {
+    )
+    where
+        Q: Borrow<K>,
+    {
         let mut cur = self.header.clone();
         let mut found = false;
+        let key = key.borrow();
         let update: [Arc<RwLock<Node<K>>>; MAX_HEIGHT] = array::from_fn(|i| {
             let level = MAX_HEIGHT - i - 1;
             loop {
@@ -103,7 +114,10 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
         return (update, cur, found);
     }
 
-    pub fn erase(&mut self, key: &K) -> bool {
+    pub fn erase<Q>(&mut self, key: Q) -> bool
+    where
+        Q: Borrow<K>,
+    {
         let (update, cur, found) = self.trace(key);
 
         if !found {
@@ -139,13 +153,17 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
         true
     }
 
-    pub fn contains(&self, key: &K) -> bool {
-        return self.find(key).is_some();
+    pub fn contains<Key>(&self, key: Key) -> bool
+    where
+        Key: Borrow<K>,
+    {
+        return self.find(key.borrow()).is_some();
     }
 
-    fn find(&self, key: &K) -> Option<Arc<RwLock<Node<K>>>> {
+    fn find<Key: Deref<Target = K>>(&self, key: Key) -> Option<Arc<RwLock<Node<K>>>> {
         let mut cur = self.header.clone();
-        for level in (0..self.height).rev() {
+        let height = self.height.read().unwrap();
+        for level in (0..*height).rev() {
             loop {
                 let next = {
                     let cur_read_lock = cur.read().unwrap();
@@ -173,6 +191,21 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
         }
         height
     }
+
+    pub fn clear(&mut self) {
+        {
+            let mut header = self.header.write().unwrap();
+            header.links.clear();
+        }
+        {
+            let mut height = self.height.write().unwrap();
+            *height = 1;
+        }
+        {
+            let mut size = self.size.write().unwrap();
+            *size = 0;
+        }
+    }
 }
 
 impl<K: Ord + std::fmt::Debug, const MAX_HEIGHT: usize, const SEED: u32> Display
@@ -181,7 +214,8 @@ impl<K: Ord + std::fmt::Debug, const MAX_HEIGHT: usize, const SEED: u32> Display
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Err(e) = f.write_fmt(format_args!(
             "Height: {} | Size: {}\n",
-            self.height, self.size
+            self.height.read().unwrap(),
+            self.size.read().unwrap()
         )) {
             return Err(e);
         };
