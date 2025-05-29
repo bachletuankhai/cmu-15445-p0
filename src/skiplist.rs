@@ -36,7 +36,7 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
         self.size.read().map(|s| *s).unwrap()
     }
 
-    pub fn insert(&mut self, key: K) -> bool {
+    pub fn insert(&self, key: K) -> bool {
         let (update, _cur, found) = self.trace(&key);
 
         if found {
@@ -114,7 +114,7 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
         return (update, cur, found);
     }
 
-    pub fn erase<Q>(&mut self, key: Q) -> bool
+    pub fn erase<Q>(&self, key: Q) -> bool
     where
         Q: Borrow<K>,
     {
@@ -183,7 +183,7 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
         None
     }
 
-    fn random_height(&mut self) -> usize {
+    fn random_height(&self) -> usize {
         let mut height: usize = 1;
         let mut rng = self.rng.write().unwrap();
         while height < MAX_HEIGHT && rng.next_u32() % 4 == 0 {
