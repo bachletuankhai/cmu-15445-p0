@@ -264,16 +264,16 @@ fn concurrent_insert_and_erase_test() {
             s.spawn(move || {
                 barrier.wait();
                 for j in start..(NUM_OPERATIONS_PER_THREAD + start) {
-                    if !list.contains(i) {
-                        list.insert(i);
+                    if !list.contains(j) {
+                        list.insert(j);
                     }
 
-                    if list.insert(i + 100) {
+                    if list.insert(j + 100) {
                         let mut inserts = succ_inserts.lock().unwrap();
                         *inserts += 1;
                     }
 
-                    if list.erase(i) {
+                    if list.erase(j) {
                         let mut erases = succ_erases.lock().unwrap();
                         *erases += 1;
                     }
