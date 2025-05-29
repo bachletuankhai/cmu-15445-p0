@@ -1,10 +1,6 @@
 use rand_core::RngCore;
 use std::{
-    array,
-    borrow::Borrow,
-    fmt::{Debug, Display},
-    ops::Deref,
-    sync::{Arc, RwLock},
+    array, borrow::Borrow, cmp::Ordering, fmt::{Debug, Display}, sync::{Arc, RwLock}
 };
 
 use mt19937::MT19937;
@@ -29,7 +25,7 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
     }
 
     pub fn empty(&self) -> bool {
-        self.height.read().map(|h| *h == 1).unwrap()
+        self.size.read().map(|h| *h == 0).unwrap()
     }
 
     pub fn size(&self) -> usize {
@@ -97,11 +93,10 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
                         None => break,
                     }
                 };
-                let next_node_read_lock = next.read().unwrap();
-                let next_key = next_node_read_lock.key.as_ref();
-                match next_key {
-                    Some(k) if *k < *key => cur = next.clone(),
-                    Some(k) if *k == *key => {
+                let next_key_cmp = next.read().map(|node| node.compare_key(key)).unwrap();
+                match next_key_cmp {
+                    Some(Ordering::Less) => cur = next.clone(),
+                    Some(Ordering::Equal) => {
                         // Key already exists
                         found = true;
                         break;
@@ -150,6 +145,15 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
                 _ => continue,
             }
         }
+        {
+            let mut size_write_lock = self.size.write().unwrap();
+            *size_write_lock -= 1;
+        }
+        {
+            let mut height_write_lock = self.height.write().unwrap();
+            *height_write_lock = self.header.read().map(|n| n.height()).unwrap();
+            println!("{}", *height_write_lock);
+        }
         true
     }
 
@@ -160,7 +164,7 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
         return self.find(key.borrow()).is_some();
     }
 
-    fn find<Key: Deref<Target = K>>(&self, key: Key) -> Option<Arc<RwLock<Node<K>>>> {
+    fn find<Key: Borrow<K>>(&self, key: Key) -> Option<Arc<RwLock<Node<K>>>> {
         let mut cur = self.header.clone();
         let height = self.height.read().unwrap();
         for level in (0..*height).rev() {
@@ -173,9 +177,9 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
                     }
                 };
                 let next_read_lock = next.read().unwrap();
-                match next_read_lock.key.as_ref() {
-                    Some(k) if *k < *key => cur = next.clone(),
-                    Some(k) if *k == *key => return Some(next.clone()),
+                match next_read_lock.compare_key(key.borrow()) {
+                    Some(Ordering::Less) => cur = next.clone(),
+                    Some(Ordering::Equal) => return Some(next.clone()),
                     _ => break,
                 }
             }
@@ -195,7 +199,7 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
     pub fn clear(&mut self) {
         {
             let mut header = self.header.write().unwrap();
-            header.links.clear();
+            header.clear();
         }
         {
             let mut height = self.height.write().unwrap();
@@ -226,9 +230,8 @@ impl<K: Ord + std::fmt::Debug, const MAX_HEIGHT: usize, const SEED: u32> Display
                 Some(arc) => {
                     let read_lock = arc.read().unwrap();
                     if let Err(e) = f.write_fmt(format_args!(
-                        "Key: {:?} | Height: {}\n",
-                        read_lock.key,
-                        read_lock.height()
+                        "{}\n",
+                        read_lock,
                     )) {
                         return Err(e);
                     }
@@ -249,49 +252,102 @@ impl<K: Ord + std::fmt::Debug, const MAX_HEIGHT: usize, const SEED: u32> Debug
     }
 }
 
-struct Node<K: Ord> {
-    key: Option<K>,
-    links: Vec<Arc<RwLock<Node<K>>>>,
+enum Node<K: Ord> {
+    Header {
+        links: Vec<Arc<RwLock<Node<K>>>>,
+    },
+    Inner {
+        key: K,
+        links: Vec<Arc<RwLock<Node<K>>>>,
+    },
+    Nil
+}
+
+impl<K: Ord + Debug> Display for Node<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Node::Header { links: _ } => f.write_fmt(format_args!("Header | Height: {}", self.height())),
+            Node::Inner { key, links: _ } => f.write_fmt(format_args!("Key: {:?} | Height: {}", key, self.height())),
+            Node::Nil => f.write_str("NIL"),
+        }
+    }
 }
 
 impl<K: Ord> Node<K> {
     fn new_header(height: usize) -> Self {
-        Node {
-            key: None,
-            links: Vec::with_capacity(height),
+        let mut links = Vec::with_capacity(height);
+        links.push(Arc::new(RwLock::new(Self::Nil)));
+        Self::Header {
+            links: links,
         }
     }
 
     fn new(key: K, height: usize) -> Self {
-        Node {
-            key: Some(key),
+        Self::Inner {
+            key: key,
             links: Vec::with_capacity(height),
         }
     }
 
     fn height(&self) -> usize {
-        self.links.len()
+        match self {
+            Node::Header { links } => links.len(),
+            Node::Inner { key: _, links } => links.len(),
+            Node::Nil => 0,
+        }
     }
 
     fn next(&self, level: usize) -> Option<Arc<RwLock<Node<K>>>> {
-        self.links.get(level).cloned()
+        match self {
+            Node::Nil => None,
+            Node::Header { links } => links.get(level).cloned(),
+            Node::Inner { key: _, links } => links.get(level).cloned()
+        }
     }
 
     fn set_next(&mut self, level: usize, next: Arc<RwLock<Node<K>>>) {
-        assert!(level < self.links.capacity());
+        let link_vec = match self {
+            Node::Header { links } => links,
+            Node::Inner { key: _, links } => links,
+            Node::Nil => return,
+        };
 
-        if level < self.links.len() {
-            self.links[level] = next;
-            return;
+        assert!(level < link_vec.capacity());
+        if level < link_vec.len() {
+            link_vec[level] = next;
+        } else {
+            link_vec.resize(level + 1, next);
         }
-
-        self.links.resize(level + 1, next);
     }
 
     fn remove_next(&mut self, level: usize) {
-        self.links.truncate(level);
+        let links = match self {
+            Node::Header { links } => links,
+            Node::Inner { key: _, links } => links,
+            Node::Nil => return,
+        };
+
+        links.truncate(level);
+    }
+
+    fn compare_key(&self, key: impl Borrow<K>) -> Option<Ordering> {
+        match self {
+            Node::Header { links: _ } => None,
+            Node::Inner { key: node_key, links: _ } => Some(node_key.cmp(key.borrow())),
+            Node::Nil => None
+        }
+    }
+
+    fn clear(&mut self) {
+        match self {
+            Node::Header { links } => links.clear(),
+            Node::Inner { key: _, links } => links.clear(),
+            Node::Nil => {},
+        }
     }
 }
+
+
 
 #[cfg(test)]
 mod skiplist_test;

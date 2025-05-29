@@ -1,4 +1,3 @@
-use std::os::unix::thread;
 use std::sync::Barrier;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -25,7 +24,7 @@ impl<const MAX_HEIGHT: usize, const SEED: u32> Check for SkipList<i32, MAX_HEIGH
                     let node = curr.read().unwrap();
                     let height = node.height();
                     assert_eq!(height, heights[pos]);
-                    assert_eq!(node.key, Some(keys[pos]));
+                    assert_eq!(node.compare_key(keys[pos]), Some(Ordering::Equal));
 
                     // Check link at each node level
                     for level in 0..height {
@@ -33,8 +32,8 @@ impl<const MAX_HEIGHT: usize, const SEED: u32> Check for SkipList<i32, MAX_HEIGH
                             if height > level {
                                 assert_eq!(
                                     node.next(level)
-                                        .and_then(|n| n.read().map(|n| n.key).unwrap()),
-                                    Some(*key)
+                                        .and_then(|n| n.read().map(|n| n.compare_key(key)).unwrap()),
+                                    Some(Ordering::Equal)
                                 );
                                 break;
                             }
@@ -130,7 +129,7 @@ fn insert_contain_test_2() {
 
 #[test]
 fn insert_and_erase() {
-    let mut list = SkipList::<i32>::new();
+    let list = SkipList::<i32>::new();
 
     for i in 0..5 {
         assert!(list.insert(i));
@@ -150,7 +149,7 @@ fn insert_and_erase() {
 
 #[test]
 fn erase_non_existing_test() {
-    let mut list = SkipList::<i32>::new();
+    let list = SkipList::<i32>::new();
 
     for i in 0..5 {
         assert!(list.insert(i));
