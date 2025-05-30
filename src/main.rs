@@ -1,4 +1,0 @@
-mod skiplist;
-
-fn main() {
-}
