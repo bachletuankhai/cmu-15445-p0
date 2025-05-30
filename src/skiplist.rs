@@ -1,38 +1,103 @@
 use rand_core::RngCore;
 use std::{
-    array, borrow::Borrow, cmp::Ordering, fmt::{Debug, Display}, sync::{Arc, RwLock}
+    array,
+    borrow::Borrow,
+    cmp::Ordering,
+    fmt::{Debug, Display},
+    sync::{Arc, RwLock},
 };
 
 use mt19937::MT19937;
 
 pub struct SkipList<K: Ord, const MAX_HEIGHT: usize = 14, const SEED: u32 = 15445> {
-    header: Arc<RwLock<Node<K>>>,
-    height: RwLock<usize>,
-    size: RwLock<usize>,
-    rng: Arc<RwLock<MT19937>>,
+    inner: Arc<RwLock<SkipListInner<K, MAX_HEIGHT, SEED>>>,
 }
 
 impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_HEIGHT, SEED> {
     pub fn new() -> Self {
+        SkipList {
+            inner: Arc::new(RwLock::new(SkipListInner::new())),
+        }
+    }
+
+    pub fn empty(&self) -> bool {
+        self.inner.read().unwrap().empty()
+    }
+
+    pub fn size(&self) -> usize {
+        self.inner.read().unwrap().size()
+    }
+
+    pub fn insert(&self, key: K) -> bool {
+        let mut inner = self.inner.write().unwrap();
+        inner.insert(key)
+    }
+
+    pub fn erase<Q>(&self, key: Q) -> bool
+    where
+        Q: Borrow<K>,
+    {
+        let mut inner = self.inner.write().unwrap();
+        inner.erase(key)
+    }
+
+    pub fn contains<Key>(&self, key: Key) -> bool
+    where
+        Key: Borrow<K>,
+    {
+        self.inner.read().unwrap().contains(key)
+    }
+
+    pub fn clear(&self) {
+        let mut inner = self.inner.write().unwrap();
+        inner.clear();
+    }
+}
+
+impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> Display
+    for SkipList<K, MAX_HEIGHT, SEED>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.inner.read().unwrap(), f)
+    }
+}
+
+impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> Debug
+    for SkipList<K, MAX_HEIGHT, SEED>
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Debug::fmt(&self.inner.read().unwrap(), f)
+    }
+}
+
+struct SkipListInner<K: Ord, const MAX_HEIGHT: usize = 14, const SEED: u32 = 15445> {
+    header: Arc<RwLock<Node<K>>>,
+    height: usize,
+    size: usize,
+    rng: Arc<RwLock<MT19937>>,
+}
+
+impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipListInner<K, MAX_HEIGHT, SEED> {
+    pub fn new() -> Self {
         let header = Arc::new(RwLock::new(Node::new_header(MAX_HEIGHT)));
         let rng = MT19937::new_with_slice_seed(&[SEED]);
-        SkipList {
+        SkipListInner {
             header,
-            height: RwLock::new(1),
-            size: RwLock::new(0),
+            height: 1,
+            size: 0,
             rng: Arc::new(RwLock::new(rng)),
         }
     }
 
     pub fn empty(&self) -> bool {
-        self.size.read().map(|h| *h == 0).unwrap()
+        self.size == 0
     }
 
     pub fn size(&self) -> usize {
-        self.size.read().map(|s| *s).unwrap()
+        self.size
     }
 
-    pub fn insert(&self, key: K) -> bool {
+    pub fn insert(&mut self, key: K) -> bool {
         let (update, _cur, found) = self.trace(&key);
 
         if found {
@@ -40,13 +105,10 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
         }
 
         let new_height = self.random_height();
-        let is_higher = self.height.read().map(|h| new_height > *h).unwrap();
-        if is_higher {
-            let mut height = self.height.write().unwrap();
-            *height += 1;
+        if new_height > self.height {
+            self.height = new_height;
         }
         let new_node = Arc::new(RwLock::new(Node::new(key, new_height)));
-
         for i in 0..new_height {
             let node_to_update = update[MAX_HEIGHT - i - 1].clone();
             {
@@ -61,10 +123,7 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
                 node_to_update_write_lock.set_next(i, new_node.clone());
             }
         }
-        {
-            let mut size = self.size.write().unwrap();
-            *size += 1;
-        }
+        self.size += 1;
 
         true
     }
@@ -109,7 +168,7 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
         return (update, cur, found);
     }
 
-    pub fn erase<Q>(&self, key: Q) -> bool
+    pub fn erase<Q>(&mut self, key: Q) -> bool
     where
         Q: Borrow<K>,
     {
@@ -137,22 +196,21 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
                         Some(arc) => {
                             node_to_update_write_lock.set_next(i, arc);
                         }
-                        None => {
-                            node_to_update_write_lock.remove_next(i);
-                        }
+                        None => {} // Should not happen, None only if node_to_delete is nil
                     }
                 }
                 _ => continue,
             }
         }
-        {
-            let mut size_write_lock = self.size.write().unwrap();
-            *size_write_lock -= 1;
-        }
-        {
-            let mut height_write_lock = self.height.write().unwrap();
-            *height_write_lock = self.header.read().map(|n| n.height()).unwrap();
-            println!("{}", *height_write_lock);
+        self.size -= 1;
+
+        loop {
+            match self.header.read().unwrap().next(self.height - 1) {
+                Some(arc) if !arc.read().unwrap().is_nil() && self.height > 1 => {
+                    self.height -= 1;
+                }
+                _ => break,
+            }
         }
         true
     }
@@ -166,8 +224,8 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
 
     fn find<Key: Borrow<K>>(&self, key: Key) -> Option<Arc<RwLock<Node<K>>>> {
         let mut cur = self.header.clone();
-        let height = self.height.read().unwrap();
-        for level in (0..*height).rev() {
+        let height = self.height;
+        for level in (0..height).rev() {
             loop {
                 let next = {
                     let cur_read_lock = cur.read().unwrap();
@@ -201,38 +259,29 @@ impl<K: Ord + Debug, const MAX_HEIGHT: usize, const SEED: u32> SkipList<K, MAX_H
             let mut header = self.header.write().unwrap();
             header.clear();
         }
-        {
-            let mut height = self.height.write().unwrap();
-            *height = 1;
-        }
-        {
-            let mut size = self.size.write().unwrap();
-            *size = 0;
-        }
+        self.height = 1;
+        self.size = 0;
     }
 }
 
 impl<K: Ord + std::fmt::Debug, const MAX_HEIGHT: usize, const SEED: u32> Display
-    for SkipList<K, MAX_HEIGHT, SEED>
+    for SkipListInner<K, MAX_HEIGHT, SEED>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Err(e) = f.write_fmt(format_args!(
             "Height: {} | Size: {}\n",
-            self.height.read().unwrap(),
-            self.size.read().unwrap()
+            self.height, self.size
         )) {
             return Err(e);
         };
         let mut cur = self.header.clone();
+        f.write_fmt(format_args!("{}, ", cur.read().unwrap()))?;
         loop {
             let next = cur.read().map(|node| node.next(0)).unwrap();
             match next {
                 Some(arc) => {
                     let read_lock = arc.read().unwrap();
-                    if let Err(e) = f.write_fmt(format_args!(
-                        "{}\n",
-                        read_lock,
-                    )) {
+                    if let Err(e) = f.write_fmt(format_args!("{}, ", read_lock,)) {
                         return Err(e);
                     }
                     cur = arc.clone();
@@ -245,7 +294,7 @@ impl<K: Ord + std::fmt::Debug, const MAX_HEIGHT: usize, const SEED: u32> Display
 }
 
 impl<K: Ord + std::fmt::Debug, const MAX_HEIGHT: usize, const SEED: u32> Debug
-    for SkipList<K, MAX_HEIGHT, SEED>
+    for SkipListInner<K, MAX_HEIGHT, SEED>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("{self}"))
@@ -254,36 +303,48 @@ impl<K: Ord + std::fmt::Debug, const MAX_HEIGHT: usize, const SEED: u32> Debug
 
 enum Node<K: Ord> {
     Header {
+        height: usize,
         links: Vec<Arc<RwLock<Node<K>>>>,
     },
     Inner {
+        height: usize,
         key: K,
         links: Vec<Arc<RwLock<Node<K>>>>,
     },
-    Nil
+    Nil,
 }
 
 impl<K: Ord + Debug> Display for Node<K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Node::Header { links: _ } => f.write_fmt(format_args!("Header | Height: {}", self.height())),
-            Node::Inner { key, links: _ } => f.write_fmt(format_args!("Key: {:?} | Height: {}", key, self.height())),
+            Node::Header { height, links: _ } => f.write_fmt(format_args!("[H {}]", height)),
+            Node::Inner { key, height, links: _ } => {
+                f.write_fmt(format_args!("[{:?} {}]", key, height))
+            }
             Node::Nil => f.write_str("NIL"),
         }
     }
 }
 
-impl<K: Ord> Node<K> {
+impl<K: Ord + Debug> Debug for Node<K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{self}"))
+    }
+}
+
+impl<K: Ord + Debug> Node<K> {
     fn new_header(height: usize) -> Self {
         let mut links = Vec::with_capacity(height);
-        links.push(Arc::new(RwLock::new(Self::Nil)));
-        Self::Header {
-            links: links,
+        let nil = Arc::new(RwLock::new(Self::Nil));
+        for _ in 0..height {
+            links.push(nil.clone());
         }
+        Self::Header { height: 1, links: links }
     }
 
     fn new(key: K, height: usize) -> Self {
         Self::Inner {
+            height: 0,
             key: key,
             links: Vec::with_capacity(height),
         }
@@ -291,8 +352,8 @@ impl<K: Ord> Node<K> {
 
     fn height(&self) -> usize {
         match self {
-            Node::Header { links } => links.len(),
-            Node::Inner { key: _, links } => links.len(),
+            Node::Header { height, .. } => *height,
+            Node::Inner { links, .. } => links.len(),
             Node::Nil => 0,
         }
     }
@@ -300,54 +361,62 @@ impl<K: Ord> Node<K> {
     fn next(&self, level: usize) -> Option<Arc<RwLock<Node<K>>>> {
         match self {
             Node::Nil => None,
-            Node::Header { links } => links.get(level).cloned(),
-            Node::Inner { key: _, links } => links.get(level).cloned()
+            Node::Header { links, .. } => links.get(level).cloned(),
+            Node::Inner { links, .. } => links.get(level).cloned(),
         }
     }
 
     fn set_next(&mut self, level: usize, next: Arc<RwLock<Node<K>>>) {
-        let link_vec = match self {
-            Node::Header { links } => links,
-            Node::Inner { key: _, links } => links,
-            Node::Nil => return,
-        };
-
-        assert!(level < link_vec.capacity());
-        if level < link_vec.len() {
-            link_vec[level] = next;
-        } else {
-            link_vec.resize(level + 1, next);
+        match self {
+            Node::Header { height, links } => {
+                if *height < level + 1 {
+                    *height = level + 1;
+                }
+                links[level] = next;
+            }
+            Node::Inner { height, links, .. } => {
+                if *height < level + 1 {
+                    *height = level + 1;
+                }
+                if level < links.len() {
+                    links[level] = next;
+                } else {
+                    links.resize(level + 1, next);
+                }
+            }
+            Node::Nil => {}
         }
-    }
-
-    fn remove_next(&mut self, level: usize) {
-        let links = match self {
-            Node::Header { links } => links,
-            Node::Inner { key: _, links } => links,
-            Node::Nil => return,
-        };
-
-        links.truncate(level);
     }
 
     fn compare_key(&self, key: impl Borrow<K>) -> Option<Ordering> {
         match self {
-            Node::Header { links: _ } => None,
-            Node::Inner { key: node_key, links: _ } => Some(node_key.cmp(key.borrow())),
-            Node::Nil => None
+            Node::Header { .. } => None,
+            Node::Inner {
+                key: node_key,
+                ..
+            } => Some(node_key.cmp(key.borrow())),
+            Node::Nil => None,
         }
     }
 
     fn clear(&mut self) {
         match self {
-            Node::Header { links } => links.clear(),
-            Node::Inner { key: _, links } => links.clear(),
-            Node::Nil => {},
+            Node::Header { links, height, .. } => {
+                links.fill(Arc::new(RwLock::new(Node::Nil)));
+                *height = 1;
+            }
+            Node::Inner { links, height, .. } => {
+                links.clear();
+                *height = 0;
+            },
+            Node::Nil => {}
         }
     }
+
+    fn is_nil(&self) -> bool {
+        matches!(self, Node::Nil)
+    }
 }
-
-
 
 #[cfg(test)]
 mod skiplist_test;

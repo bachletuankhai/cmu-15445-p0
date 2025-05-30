@@ -12,14 +12,13 @@ trait Check {
 impl<const MAX_HEIGHT: usize, const SEED: u32> Check for SkipList<i32, MAX_HEIGHT, SEED> {
     fn check_integrity(&self, keys: &Vec<i32>, heights: &Vec<usize>) {
         assert_eq!(self.size(), keys.len());
-
+        let list = self.inner.read().unwrap();
         let mut pos = 0;
-        let mut curr = self.header.clone();
+        let mut curr = list.header.clone();
         loop {
             let next = curr.read().map(|n| n.next(0)).unwrap();
-
             match next {
-                Some(node) => {
+                Some(node) if !node.read().unwrap().is_nil() => {
                     curr = node;
                     let node = curr.read().unwrap();
                     let height = node.height();
@@ -28,11 +27,11 @@ impl<const MAX_HEIGHT: usize, const SEED: u32> Check for SkipList<i32, MAX_HEIGH
 
                     // Check link at each node level
                     for level in 0..height {
-                        for key in &keys[(pos + 1)..] {
-                            if height > level {
+                        for i in (pos + 1)..keys.len() {
+                            if heights[i] > level {
                                 assert_eq!(
                                     node.next(level)
-                                        .and_then(|n| n.read().map(|n| n.compare_key(key)).unwrap()),
+                                        .and_then(|n| n.read().map(|n| n.compare_key(keys[i])).unwrap()),
                                     Some(Ordering::Equal)
                                 );
                                 break;
@@ -41,7 +40,7 @@ impl<const MAX_HEIGHT: usize, const SEED: u32> Check for SkipList<i32, MAX_HEIGH
                     }
                     pos += 1;
                 }
-                None => break,
+                _ => break,
             }
         }
 
@@ -54,7 +53,7 @@ fn integrity_check_test() {
     let list = SkipList::<i32>::new();
 
     let mut keys = vec![12, 16, 2, 6, 15, 8, 13, 1, 11, 14, 0, 4, 19, 10, 9, 5, 7, 3, 17, 18];
-    let heights = vec![2, 1, 1, 1, 2, 1, 1, 1, 2, 1, 2, 1, 3, 1, 1, 2, 1, 1, 2, 3];
+    let heights = vec![1, 1, 2, 1, 1, 1, 1, 2, 1, 1, 3, 1, 2, 1, 1, 1, 1, 1, 1, 1];
 
     for key in &keys {
         list.insert(*key);
@@ -67,7 +66,7 @@ fn integrity_check_test() {
 
 #[test]
 fn insert_contain_test_1() {
-    let mut list = SkipList::<i32>::new();
+    let list = SkipList::<i32>::new();
 
     assert_eq!(list.size(), 0);
     assert!(list.empty());
@@ -171,11 +170,12 @@ fn concurrent_insert_test() {
     let list = Arc::new(list);
     let barrier = Arc::new(Barrier::new(num_threads));
     std::thread::scope(|s| {
+        let mut threads = Vec::with_capacity(num_threads);
         for i in 0..num_threads {
             let list = Arc::clone(&list);
             let barrier = Arc::clone(&barrier);
             let successful_insertion = Arc::clone(&successful_insertion);
-            s.spawn(move || {
+            let handler = s.spawn(move || {
                 barrier.wait();
                 let k = i * num_insertions_per_thread;
                 for j in 0..num_insertions_per_thread {
@@ -186,13 +186,18 @@ fn concurrent_insert_test() {
                     }
                 }
             });
+            threads.push(handler);
+        }
+        for thread in threads {
+            thread.join().unwrap();
         }
     });
 
     assert_eq!(successful_insertion.lock().unwrap().to_owned(), num_threads * num_insertions_per_thread);
 
+    println!("{list}");
     for i in 0..(num_threads * num_insertions_per_thread) {
-        assert!(list.contains::<i32>(i.try_into().unwrap()));
+        assert!(list.contains::<i32>(i as i32), "Failed to find key: {}", i);
     }
 }
 
